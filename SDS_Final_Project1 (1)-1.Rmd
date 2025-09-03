@@ -1,0 +1,361 @@
+---
+title: "SDS_Final_Project: Predictive Analysis of NFL Quarterback Performance"
+output: html_document
+date: "2024-12-04"
+---
+This project explores various factors influencing NFL quarterbacks' performance, focusing on touchdowns per season. I aim to understand the predictive power of variables such as team affiliation, pass attempts, and passing yards.
+
+Our Research Question: Does the team a quarterback plays for, along with their number of completions, passing attempts, and passing yards per game, predict the number of touchdown passes that quarterback will have in a season?
+
+Dataset Overview: I utilized data from the 2024 NFL season, which includes detailed performance metrics for quarterbacks. This dataset enables us to build predictive models to estimate the touchdown passes based on given performance indicators.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Installing the Required Packages/Libraries
+```{r}
+# install and load packages
+#install.packages("randomForest")
+#install.packages("caret")
+#install.packages("magrittr")
+library(rvest)
+library(tidyverse)
+library(corrplot)
+library(dplyr)
+library(randomForest) # For building random forest models
+library(caret)      # For model training and data splitting
+library(magrittr)
+
+```
+Part 1: Extracting, Cleaning, and Wrangling the Data
+```{r}
+url <- "https://www.espn.com/nfl/stats/player/_/season/2024/seasontype/2/table/passing/sort/QBRating/dir/desc"
+
+raw_data <- html_table(read_html(url))
+print(raw_data)
+```
+```{r}
+# Get two tables
+names_table <- raw_data[[1]]
+stats_table <- raw_data[[2]]
+```
+
+```{r}
+# Handle names_table to separate player names from teams
+names_table <- names_table %>%
+  mutate(
+    Team = str_extract(Name, "[A-Z]{2,}$"),
+    Player = str_remove(Name, "[A-Z]{2,}$"),
+    Player = str_trim(Player)
+  ) %>%
+  select(-Name)
+```
+
+
+```{r}
+# Merge data
+qb_data <- bind_cols(names_table, stats_table)
+# Select columns
+qb_data_clean <- qb_data %>%
+  select(
+    Player,
+    Team,
+    Completions = CMP,
+    Attempts = ATT,
+    PassingYards = YDS,
+    YardsPerGame = `YDS/G`,
+    YardsPerAttempt = AVG,
+    Touchdowns = TD
+  )
+
+# View processed data
+head(qb_data_clean)
+```
+
+```{r}
+str(qb_data_clean)
+
+# Convert a string type value to a numeric type
+qb_data_clean <- qb_data_clean %>%
+  mutate(
+    PassingYards = as.numeric(str_remove_all(PassingYards, ",")),
+    across(c(Completions, Attempts, YardsPerGame, YardsPerAttempt, Touchdowns), as.numeric)
+  )
+
+# Check data summaries
+summary(qb_data_clean)
+```
+Visualizing the Data:
+```{r}
+# Create a correlation matrix
+numeric_cols <- c("Completions", "Attempts", "PassingYards", "YardsPerGame", 
+                  "YardsPerAttempt", "Touchdowns")
+correlation_matrix <- cor(qb_data_clean[numeric_cols])
+```
+
+```{r}
+# Heatmap of correlations
+corrplot(correlation_matrix, method = "color", type = "upper", 
+         order = "hclust", addCoef.col = "black",
+         tl.col = "black", tl.srt = 45,
+         title = "Correlation Matrix of QB Statistics")
+```
+
+```{r}
+# Create scatterplot
+pairs_plot <- ggplot(qb_data_clean, aes(x = PassingYards, y = Touchdowns)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Passing Yards vs Touchdowns",
+       x = "Passing Yards",
+       y = "Touchdowns") +
+  theme_minimal()
+
+pairs_plot
+```
+
+```{r}
+# Create box-and-line charts to show the distribution of different teams
+team_td_plot <- ggplot(qb_data_clean, aes(x = reorder(Team, Touchdowns, median), 
+                                          y = Touchdowns)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Touchdown Distribution by Team",
+       x = "Team",
+       y = "Touchdowns") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+team_td_plot
+```
+Statistical Summaries of the Data:
+```{r}
+# Create basic statistical summaries
+summary_stats <- qb_data_clean %>%
+  summarise(
+    mean_td = mean(Touchdowns),
+    median_td = median(Touchdowns),
+    sd_td = sd(Touchdowns),
+    min_td = min(Touchdowns),
+    max_td = max(Touchdowns)
+  )
+
+print("Touchdown Statistics Summary:")
+print(summary_stats)
+```
+
+```{r, message=FALSE}
+#install.packages("randomForest")
+#install.packages("Metrics")
+#install.packages("rpart.plot")
+library(caret)       
+library(rpart)
+library(rpart.plot)
+library(Metrics)
+library(MASS)
+library(randomForest)
+```
+Predictive Models - Decision Tree Regression Model & Random Forest Tree Model:
+```{r}
+# Split data into train (70%) and test (30%) sets
+set.seed(2024) 
+train_index <- createDataPartition(qb_data_clean$Touchdowns, p = 0.8, list = FALSE)
+train_data <- qb_data_clean[train_index, ]
+test_data <- qb_data_clean[-train_index, ]
+```
+
+```{r}
+# Fit a Decision Tree Regression Model
+tree_model <- rpart(
+  Touchdowns ~ Completions + Attempts + PassingYards + YardsPerGame + YardsPerAttempt + Team, 
+  data = train_data, 
+  method = "anova"
+)
+```
+
+```{r}
+# Decision Tree Visualization
+rpart.plot(tree_model, type = 2, fallen.leaves = TRUE, cex = 0.7, 
+           main = "Decision Tree for Predicting Touchdowns")
+```
+
+```{r}
+# Make Predictions on Test Set
+test_data$Team <- factor(test_data$Team, levels = levels(train_data$Team))
+predictions <- predict(tree_model, test_data)
+
+# Assess Model Performance and calculate Mean Squared Error (MSE)
+dt_pred_mse <- mse(test_data$Touchdowns, predictions)
+print(paste("The mean standard error is: ", round(dt_pred_mse, 2)))
+```
+
+```{r}
+# Calculate R-squared (R2)
+dt_r_squared <- 1 - (sum((test_data$Touchdowns - predictions)^2) / 
+                  sum((test_data$Touchdowns - mean(test_data$Touchdowns))^2))
+print(paste("The R-squared is: ", round(dt_r_squared, 2)))
+```
+
+```{r}
+# Step 6: Visualize Predictions vs Actual Touchdowns
+prediction_plot <- ggplot(data.frame(Actual = test_data$Touchdowns, Predicted = predictions), aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs Predicted Touchdowns",
+       x = "Actual Touchdowns",
+       y = "Predicted Touchdowns") +
+  theme_minimal()
+
+prediction_plot
+```
+```{r}
+# Random Forest Model
+
+# Data Splitting 
+
+# Set random seed for reproducibility
+set.seed(123)
+# Create training/test split (80% training, 20% testing)
+train_index <- createDataPartition(qb_data_clean$Touchdowns, p = 0.8, list = FALSE)
+train_data <- qb_data_clean[train_index, ]
+test_data <- qb_data_clean[-train_index, ]
+
+```
+
+```{r}
+# Train first random forest model with default parameters
+rf_initial <- randomForest(
+  Touchdowns ~ Completions + Attempts + PassingYards + YardsPerGame + 
+    YardsPerAttempt + Team,
+  data = train_data,
+  ntree = 500,
+  importance = TRUE
+)
+
+```
+
+```{r}
+# ==== Initial Model Evaluation Section ====
+# Make predictions on test set
+initial_preds <- predict(rf_initial, test_data)
+
+# Calculate performance metrics
+initial_mse <- mean((test_data$Touchdowns - initial_preds)^2)
+initial_rmse <- sqrt(initial_mse)
+initial_r2 <- 1 - sum((test_data$Touchdowns - initial_preds)^2) /
+  sum((test_data$Touchdowns - mean(test_data$Touchdowns))^2)
+
+
+```
+
+```{r}
+# ==== Model Tuning Section ====
+# Set up cross-validation parameters
+tune_grid <- expand.grid(mtry = 2:6)
+train_control <- trainControl(method = "cv", number = 5)
+
+# Perform grid search with cross-validation
+rf_tuned <- train(
+  Touchdowns ~ Completions + Attempts + PassingYards + YardsPerGame + 
+    YardsPerAttempt + Team,
+  data = train_data,
+  method = "rf",
+  trControl = train_control,
+  tuneGrid = tune_grid
+)
+
+```
+
+```{r}
+# ==== Final Model Training Section ====
+# Train final model using best parameters found during tuning
+rf_final <- randomForest(
+  Touchdowns ~ Completions + Attempts + PassingYards + YardsPerGame + 
+    YardsPerAttempt + Team,
+  data = train_data,
+  ntree = 500,
+  mtry = rf_tuned$bestTune$mtry
+)
+
+```
+
+
+```{r}
+# ==== Final Model Evaluation Section ====
+# Make predictions with final model
+final_preds <- predict(rf_final, test_data)
+
+# Calculate final performance metrics
+rf_final_mse <- mean((test_data$Touchdowns - final_preds)^2)
+rf_final_rmse <- sqrt(rf_final_mse)
+rf_final_r2 <- 1 - sum((test_data$Touchdowns - final_preds)^2) / 
+  sum((test_data$Touchdowns - mean(test_data$Touchdowns))^2)
+
+```
+
+```{r}
+# ==== Results Presentation Section ====
+# Create dataframe with predictions and actual values
+results_df <- data.frame(
+  Player = test_data$Player,
+  Actual = test_data$Touchdowns,
+  Predicted = round(final_preds, 1),
+  Difference = round(abs(test_data$Touchdowns - final_preds), 1)
+)
+
+# Sort results by prediction difference to identify largest errors
+sorted_results <- results_df[order(-results_df$Difference), ]
+print(head(sorted_results, 10))  # Display top 10 largest prediction errors
+
+```
+```{r}
+# Random Forest Model Graph
+
+rf_plot <- ggplot(data.frame(Actual = test_data$Touchdowns, Predicted = final_preds), aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue") +
+  geom_abline(slope = 1, intercept = 0, color = "black") +
+  labs(title = "Random Forest: Actual vs Predicted Touchdowns",
+       x = "Actual Touchdowns", y = "Predicted Touchdowns") +
+  theme_minimal()
+
+rf_plot
+```
+
+```{r}
+# Comparing the models 
+# Results
+cat("Decision Tree - MSE:", dt_pred_mse, "RMSE:", sqrt(dt_pred_mse), "R²:", dt_r_squared, "\n")
+cat("Random Forest - MSE:", rf_final_mse, "RMSE:", rf_final_rmse, "R²:", rf_final_r2, "\n")
+
+```
+
+```{r}
+# Compare the models side-by-side
+
+library(gridExtra)
+grid.arrange(prediction_plot, rf_plot, ncol = 2)
+```
+Analysis:
+
+Research Question: Does the team a quarterback plays for, along with their number of completions, passing attempts, and passing yards per game, predict the number of touchdown passes that quarterback will have in a season?
+
+MSE Analysis:
+The Random Forest model shows superior performance with both a lower MSE and RMSE than the Decision Tree model. Specifically, the Random Forest model’s MSE of 5.891496 compared to the Decision Tree’s 6.749745 indicates that it is more accurate in predicting the actual touchdown scores—its predictions are consistently closer to the true data points.
+
+RMSE Analysis:
+The Decision Tree Model has an RMSE of 4.645527, which is lower than the Random Forest Model's RMSE of 5.024856, meaning that Decision Tree model is more precise, as its predictions deviate less from the observed values. The lower RMSE means the Decision Tree model has a higher accuracy to predict the number of touchdowns.
+
+R² Analysis:
+When examining the R² values (the proportion of variance for a dependent variable that's explained by the independent variables in the model), the Decision Tree model, again, shows a higher value (0.7180093) compared to the Random Forest model (0.6925423). This higher R² value means the Decision Tree model can better account for the variability in quarterback touchdown passes with the variables provided.
+
+About this Analysis:
+
+- The analysis conclusively shows that the team environment and quarterback performance metrics such as completions, attempts, and passing yards per game are significant predictors of the number of touchdown passes.
+- For teams and sports analysts, this information is crucial. It confirms that evaluating these specific metrics can help predict quarterback performance, thereby aiding in strategic decisions regarding player selection and game strategy.
+- For fantasy football players, these insights provide a statistical basis to choose quarterbacks who are likely to perform well, based on predictive factors rather than merely historical performance.
+
+
+Which Model is Better?:
+
+The analysis of MSE, RMSE, and R² indicated that the Decision Tree model, in this case, outperforms the Random Forest model in predicting the number of touchdown passes. This could be due to several reasons, including the nature of the data, the interactions among the variables, or the Decision Tree model's ability to handle specific nuances in this particular dataset more effectively.
+
