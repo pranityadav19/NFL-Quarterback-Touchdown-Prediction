@@ -75,6 +75,3 @@ I used regression-based predictive models since touchdown passes are a continuou
 - **Language**: R  
 - **Libraries**: tidyverse, rvest, caret, corrplot  
 - **Methods**: Decision Tree Regression, Random Forest Regression
-
-
-## 📂 Repo Structure
